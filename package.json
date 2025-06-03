@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250603.0",
+    "@tailwindcss/vite": "^4.1.8",
     "@tsconfig/node22": "^22.0.2",
     "@types/node": "^22.15.29",
     "@vitejs/plugin-vue": "^5.2.4",
