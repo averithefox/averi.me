@@ -2,50 +2,12 @@
   <main
     class="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white font-sans flex items-center justify-center p-4 relative overflow-hidden"
   >
-    <div class="absolute inset-0 pointer-events-none">
-      <svg class="absolute inset-0 w-full h-full">
-        <defs>
-          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="2" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="strongGlow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="3" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-
-        <line
-          v-for="connection in connections"
-          :key="`${connection.from}-${connection.to}`"
-          :x1="particles[connection.from].x + 4"
-          :y1="particles[connection.from].y + 4"
-          :x2="particles[connection.to].x + 4"
-          :y2="particles[connection.to].y + 4"
-          :stroke="`rgba(147, 197, 253, ${connection.opacity})`"
-          :stroke-width="Math.max(0.5, 2 - connection.distance / 100)"
-          class="transition-all duration-300 ease-out"
-          filter="url(#glow)"
-        />
-      </svg>
-
-      <div
-        v-for="(particle, index) in particles"
-        :key="index"
-        class="absolute w-2 h-2 bg-blue-400 rounded-full particle-glow"
-        :style="{
-          left: particle.x + 'px',
-          top: particle.y + 'px',
-          opacity: 0.8
-        }"
-      />
-    </div>
+    <canvas
+      ref="canvasRef"
+      class="absolute inset-0 w-full h-full pointer-events-none"
+      :width="canvasWidth"
+      :height="canvasHeight"
+    />
 
     <div class="max-w-2xl mx-auto text-center space-y-8 relative z-10">
       <div class="space-y-4">
@@ -58,7 +20,6 @@
       </div>
 
       <div class="space-y-2 entry-social-section">
-        <!-- <h2 class="text-2xl font-semibold text-slate-200">Connect with me</h2> -->
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
           <a
             v-for="(social, index) in socials"
@@ -81,7 +42,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick } from 'vue';
 import type { IconType } from 'vue-icons-plus';
 import { BsDiscord, BsGithub, BsTwitter } from 'vue-icons-plus/bs';
 import { SiBluesky } from 'vue-icons-plus/si';
@@ -128,22 +89,36 @@ interface Connection {
   targetOpacity: number;
 }
 
+const canvasRef = ref<HTMLCanvasElement | null>(null);
+const canvasWidth = ref(0);
+const canvasHeight = ref(0);
 const particles = ref<Particle[]>([]);
 const connections = ref<Connection[]>([]);
 const connectionMap = ref<Map<string, Connection>>(new Map());
 const animationId = ref<number | null>(null);
 
-const PARTICLE_COUNT = 25;
-const CONNECTION_DISTANCE = 120;
-const PARTICLE_SPEED = 0.3;
-const FADE_SPEED = 0.05;
+const PARTICLE_COUNT = 100;
+const CONNECTION_DISTANCE = 150;
+const PARTICLE_SPEED = 0.8;
+const FADE_SPEED = 0.08;
+const PARTICLE_SIZE = 3;
+const MAX_LINE_WIDTH = 2.5;
+const COLLISION_DISTANCE = 12;
+const REPULSION_FORCE = 0.02;
+const CONNECTION_BOOST = 0.003;
+const MIN_VELOCITY = 0.2;
+
+const updateCanvasSize = () => {
+  canvasWidth.value = window.innerWidth;
+  canvasHeight.value = window.innerHeight;
+};
 
 const initializeParticles = () => {
   particles.value = [];
   for (let i = 0; i < PARTICLE_COUNT; i++) {
     particles.value.push({
-      x: Math.random() * window.innerWidth,
-      y: Math.random() * window.innerHeight,
+      x: Math.random() * canvasWidth.value,
+      y: Math.random() * canvasHeight.value,
       vx: (Math.random() - 0.5) * PARTICLE_SPEED * 2,
       vy: (Math.random() - 0.5) * PARTICLE_SPEED * 2
     });
@@ -177,13 +152,13 @@ const updateConnections = () => {
             to: j,
             distance,
             opacity: 0,
-            targetOpacity: Math.max(0.1, 0.4 - distance / 300)
+            targetOpacity: Math.max(0.1, 0.6 - distance / 250)
           };
           connectionMap.value.set(key, newConnection);
         } else {
           const connection = connectionMap.value.get(key)!;
           connection.distance = distance;
-          connection.targetOpacity = Math.max(0.1, 0.4 - distance / 300);
+          connection.targetOpacity = Math.max(0.1, 0.6 - distance / 250);
         }
       }
     }
@@ -214,36 +189,206 @@ const updateConnections = () => {
 };
 
 const updateParticles = () => {
+  connections.value.forEach(connection => {
+    if (connection.opacity <= 0) return;
+
+    const fromParticle = particles.value[connection.from];
+    const toParticle = particles.value[connection.to];
+
+    const dx = toParticle.x - fromParticle.x;
+    const dy = toParticle.y - fromParticle.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance > 0) {
+      const normalX = dx / distance;
+      const normalY = dy / distance;
+
+      const fromDotProduct = fromParticle.vx * normalX + fromParticle.vy * normalY;
+      const toDotProduct = toParticle.vx * normalX + toParticle.vy * normalY;
+
+      const boostStrength = CONNECTION_BOOST * connection.opacity;
+
+      if (fromDotProduct > 0) {
+        fromParticle.vx += normalX * boostStrength * Math.abs(fromDotProduct);
+        fromParticle.vy += normalY * boostStrength * Math.abs(fromDotProduct);
+      } else if (fromDotProduct < 0) {
+        fromParticle.vx -= normalX * boostStrength * Math.abs(fromDotProduct);
+        fromParticle.vy -= normalY * boostStrength * Math.abs(fromDotProduct);
+      }
+
+      if (toDotProduct > 0) {
+        toParticle.vx += normalX * boostStrength * Math.abs(toDotProduct);
+        toParticle.vy += normalY * boostStrength * Math.abs(toDotProduct);
+      } else if (toDotProduct < 0) {
+        toParticle.vx -= normalX * boostStrength * Math.abs(toDotProduct);
+        toParticle.vy -= normalY * boostStrength * Math.abs(toDotProduct);
+      }
+    }
+  });
+
+  for (let i = 0; i < particles.value.length; i++) {
+    for (let j = i + 1; j < particles.value.length; j++) {
+      const p1 = particles.value[i];
+      const p2 = particles.value[j];
+
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance < COLLISION_DISTANCE && distance > 0) {
+        const normalX = dx / distance;
+        const normalY = dy / distance;
+
+        const relativeVx = p2.vx - p1.vx;
+        const relativeVy = p2.vy - p1.vy;
+
+        const relativeSpeed = relativeVx * normalX + relativeVy * normalY;
+
+        if (relativeSpeed < 0) {
+          const restitution = 0.8;
+          const impulse = relativeSpeed * restitution;
+
+          p1.vx += impulse * normalX;
+          p1.vy += impulse * normalY;
+          p2.vx -= impulse * normalX;
+          p2.vy -= impulse * normalY;
+        }
+
+        const overlap = COLLISION_DISTANCE - distance;
+        const repulsionX = normalX * overlap * REPULSION_FORCE;
+        const repulsionY = normalY * overlap * REPULSION_FORCE;
+
+        p1.vx -= repulsionX;
+        p1.vy -= repulsionY;
+        p2.vx += repulsionX;
+        p2.vy += repulsionY;
+      }
+    }
+  }
+
   particles.value.forEach(particle => {
     particle.x += particle.vx;
     particle.y += particle.vy;
 
-    if (particle.x <= 0 || particle.x >= window.innerWidth) {
-      particle.vx *= -1;
-      particle.x = Math.max(0, Math.min(window.innerWidth, particle.x));
+    particle.vx *= 0.9995;
+    particle.vy *= 0.9995;
+
+    const currentSpeed = Math.sqrt(particle.vx * particle.vx + particle.vy * particle.vy);
+    if (currentSpeed < MIN_VELOCITY) {
+      const angle = Math.random() * Math.PI * 2;
+      const boost = MIN_VELOCITY - currentSpeed + 0.1;
+      particle.vx += Math.cos(angle) * boost;
+      particle.vy += Math.sin(angle) * boost;
     }
-    if (particle.y <= 0 || particle.y >= window.innerHeight) {
-      particle.vy *= -1;
-      particle.y = Math.max(0, Math.min(window.innerHeight, particle.y));
+
+    const maxVelocity = 4;
+    const speed = Math.sqrt(particle.vx * particle.vx + particle.vy * particle.vy);
+    if (speed > maxVelocity) {
+      particle.vx = (particle.vx / speed) * maxVelocity;
+      particle.vy = (particle.vy / speed) * maxVelocity;
+    }
+
+    if (particle.x <= 0 || particle.x >= canvasWidth.value) {
+      particle.vx *= -0.9;
+      particle.x = Math.max(0, Math.min(canvasWidth.value, particle.x));
+    }
+    if (particle.y <= 0 || particle.y >= canvasHeight.value) {
+      particle.vy *= -0.9;
+      particle.y = Math.max(0, Math.min(canvasHeight.value, particle.y));
     }
   });
+};
+
+const drawParticles = (ctx: CanvasRenderingContext2D) => {
+  particles.value.forEach(particle => {
+    ctx.save();
+    ctx.beginPath();
+
+    const gradient = ctx.createRadialGradient(particle.x, particle.y, 0, particle.x, particle.y, PARTICLE_SIZE * 2);
+    gradient.addColorStop(0, 'rgba(147, 197, 253, 0.8)');
+    gradient.addColorStop(0.3, 'rgba(147, 197, 253, 0.4)');
+    gradient.addColorStop(0.6, 'rgba(147, 197, 253, 0.2)');
+    gradient.addColorStop(1, 'rgba(147, 197, 253, 0)');
+
+    ctx.fillStyle = gradient;
+    ctx.arc(particle.x, particle.y, PARTICLE_SIZE * 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(147, 197, 253, 0.9)';
+    ctx.arc(particle.x, particle.y, PARTICLE_SIZE, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  });
+};
+
+const drawConnections = (ctx: CanvasRenderingContext2D) => {
+  connections.value.forEach(connection => {
+    if (connection.opacity <= 0) return;
+
+    const fromParticle = particles.value[connection.from];
+    const toParticle = particles.value[connection.to];
+
+    ctx.save();
+
+    const gradient = ctx.createLinearGradient(fromParticle.x, fromParticle.y, toParticle.x, toParticle.y);
+    gradient.addColorStop(0, `rgba(147, 197, 253, ${connection.opacity})`);
+    gradient.addColorStop(0.5, `rgba(147, 197, 253, ${connection.opacity * 0.8})`);
+    gradient.addColorStop(1, `rgba(147, 197, 253, ${connection.opacity})`);
+
+    ctx.strokeStyle = gradient;
+    ctx.lineWidth = Math.max(0.5, MAX_LINE_WIDTH - connection.distance / 80);
+    ctx.lineCap = 'round';
+
+    ctx.shadowColor = 'rgba(147, 197, 253, 0.5)';
+    ctx.shadowBlur = 3;
+
+    ctx.beginPath();
+    ctx.moveTo(fromParticle.x, fromParticle.y);
+    ctx.lineTo(toParticle.x, toParticle.y);
+    ctx.stroke();
+
+    ctx.restore();
+  });
+};
+
+const render = () => {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  ctx.clearRect(0, 0, canvasWidth.value, canvasHeight.value);
+
+  drawConnections(ctx);
+
+  drawParticles(ctx);
 };
 
 const animate = () => {
   updateParticles();
   updateConnections();
+  render();
   animationId.value = requestAnimationFrame(animate);
 };
 
 const handleResize = () => {
-  initializeParticles();
-  connectionMap.value.clear();
-  connections.value = [];
+  updateCanvasSize();
+  nextTick(() => {
+    initializeParticles();
+    connectionMap.value.clear();
+    connections.value = [];
+  });
 };
 
 onMounted(() => {
-  initializeParticles();
-  animate();
+  updateCanvasSize();
+  nextTick(() => {
+    initializeParticles();
+    animate();
+  });
   window.addEventListener('resize', handleResize);
 });
 
@@ -256,27 +401,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.particle-glow {
-  box-shadow: 0 0 6px rgba(147, 197, 253, 0.6), 0 0 12px rgba(147, 197, 253, 0.4), 0 0 18px rgba(147, 197, 253, 0.2);
-  filter: drop-shadow(0 0 4px rgba(147, 197, 253, 0.8));
-}
-
-.particle-glow {
-  animation: pulse-glow 3s ease-in-out infinite;
-}
-
-@keyframes pulse-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 6px rgba(147, 197, 253, 0.6), 0 0 12px rgba(147, 197, 253, 0.4), 0 0 18px rgba(147, 197, 253, 0.2);
-    filter: drop-shadow(0 0 4px rgba(147, 197, 253, 0.8));
-  }
-  50% {
-    box-shadow: 0 0 8px rgba(147, 197, 253, 0.8), 0 0 16px rgba(147, 197, 253, 0.6), 0 0 24px rgba(147, 197, 253, 0.4);
-    filter: drop-shadow(0 0 6px rgba(147, 197, 253, 1));
-  }
-}
-
 .entry-title {
   opacity: 0;
   transform: translateY(-30px);
