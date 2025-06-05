@@ -97,7 +97,7 @@ const connections = ref<Connection[]>([]);
 const connectionMap = ref<Map<string, Connection>>(new Map());
 const animationId = ref<number | null>(null);
 
-const PARTICLE_COUNT = 100;
+const PARTICLE_COUNT = 25;
 const CONNECTION_DISTANCE = 150;
 const PARTICLE_SPEED = 0.8;
 const FADE_SPEED = 0.08;
