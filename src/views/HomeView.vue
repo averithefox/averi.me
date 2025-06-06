@@ -4,9 +4,12 @@
   >
     <canvas
       ref="canvasRef"
-      class="absolute inset-0 w-full h-full pointer-events-none"
+      class="absolute inset-0 w-full h-full"
       :width="canvasWidth"
       :height="canvasHeight"
+      @mousemove="handleMouseMove"
+      @mouseenter="handleMouseEnter"
+      @mouseleave="handleMouseLeave"
     />
 
     <div class="max-w-2xl mx-auto text-center space-y-8 relative z-10">
@@ -96,6 +99,8 @@ const particles = ref<Particle[]>([]);
 const connections = ref<Connection[]>([]);
 const connectionMap = ref<Map<string, Connection>>(new Map());
 const animationId = ref<number | null>(null);
+const mousePosition = ref({ x: 0, y: 0 });
+const isMouseInCanvas = ref(false);
 
 const PARTICLE_COUNT = 25;
 const CONNECTION_DISTANCE = 150;
@@ -107,6 +112,8 @@ const COLLISION_DISTANCE = 12;
 const REPULSION_FORCE = 0.02;
 const CONNECTION_BOOST = 0.003;
 const MIN_VELOCITY = 0.2;
+const MOUSE_REPULSION_DISTANCE = 200;
+const MOUSE_REPULSION_FORCE = 0.15;
 
 const updateCanvasSize = () => {
   canvasWidth.value = window.innerWidth;
@@ -266,6 +273,29 @@ const updateParticles = () => {
     }
   }
 
+  // Apply mouse repulsion
+  if (isMouseInCanvas.value) {
+    particles.value.forEach(particle => {
+      const dx = particle.x - mousePosition.value.x;
+      const dy = particle.y - mousePosition.value.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance < MOUSE_REPULSION_DISTANCE && distance > 0) {
+        // Smooth falloff: stronger when close, weaker when far
+        const repulsionStrength = (MOUSE_REPULSION_DISTANCE - distance) / MOUSE_REPULSION_DISTANCE;
+        const smoothFalloff = repulsionStrength * repulsionStrength; // Quadratic falloff for smoother effect
+        const normalizedDx = dx / distance;
+        const normalizedDy = dy / distance;
+
+        const forceX = normalizedDx * MOUSE_REPULSION_FORCE * smoothFalloff;
+        const forceY = normalizedDy * MOUSE_REPULSION_FORCE * smoothFalloff;
+
+        particle.vx += forceX;
+        particle.vy += forceY;
+      }
+    });
+  }
+
   particles.value.forEach(particle => {
     particle.x += particle.vx;
     particle.y += particle.vy;
@@ -381,6 +411,25 @@ const handleResize = () => {
     connectionMap.value.clear();
     connections.value = [];
   });
+};
+
+const handleMouseMove = (event: MouseEvent) => {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+
+  const rect = canvas.getBoundingClientRect();
+  mousePosition.value = {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top
+  };
+};
+
+const handleMouseEnter = () => {
+  isMouseInCanvas.value = true;
+};
+
+const handleMouseLeave = () => {
+  isMouseInCanvas.value = false;
 };
 
 onMounted(() => {
